@@ -25,6 +25,9 @@ import os
 import json
 import logging
 import requests
+import boto3
+from sshtunnel import SSHTunnelForwarder
+from base64 import b64decode
 
 logger = logging.getLogger()
 
@@ -42,8 +45,8 @@ class HomeAssistant(object):
         self.session.verify = config.ssl_verify
         self.session.cert = config.ssl_client
 
-    def build_url(self, endpoint):
-        return f'{self.config.url}/api/{endpoint}'
+    def build_url(self, endpoint, port):
+        return f'{self.config.url}:{port}/api/{endpoint}'
 
     def get_user_agent(self):
         library = "Home Assistant Alexa Smart Home Skill"
@@ -51,18 +54,16 @@ class HomeAssistant(object):
         default_user_agent = requests.utils.default_user_agent()
         return f"{library} - {aws_region} - {default_user_agent}"
 
-    def get(self, endpoint):
-        r = self.session.get(self.build_url(endpoint))
+    def get(self, endpoint, port):
+        r = self.session.get(self.build_url(endpoint, port))
         r.raise_for_status()
         return r.json()
 
-    def post(self, endpoint, data, wait=False):
+    def post(self, endpoint, port, data, wait=False):
         read_timeout = None if wait else 0.01
         try:
             logger.debug(f'calling {endpoint} with {data}')
-            r = self.session.post(self.build_url(endpoint),
-                                  data=json.dumps(data),
-                                  timeout=(None, read_timeout))
+            r = self.session.post(self.build_url(endpoint, port), data=json.dumps(data), timeout=(None, read_timeout))
             r.raise_for_status()
             return r.json()
         except requests.exceptions.ReadTimeout:
@@ -87,6 +88,21 @@ class Configuration(object):
         self.bearer_token = self.get(['bearer_token'], default='')
         self.ssl_client = self.get(['ssl_client'], default='')
         self.debug = self.get(['debug'], default=False)
+        self.ssh_enabled = self.get(['ssh_enabled'], default=False)
+        if self.ssh_enabled:
+            self.ssh_username = self.get(['ssh_username'], default='')
+            self.ssh_remote_host_public_url = self.get(
+                ['ssh_remote_host_public_url'], default='')
+            self.ssh_remote_host_public_port = self.get(
+                ['ssh_remote_host_public_port'], default=22)
+            self.ssh_remote_host_private_url = self.get(
+                ['ssh_remote_host_private_url'], default='0.0.0.0')
+            self.ssh_remote_host_private_port = self.get(
+                ['ssh_remote_host_private_port'], default=8123)
+            self.ssh_local_host_port = self.get(
+                ['ssh_local_host_port'], default=8123)
+            self.ssh_key_is_encrypted = self.get(
+                ['ssh_key_is_encrypted'], default=False)
 
     def get(self, keys, default=None):
         for key in keys:
@@ -102,10 +118,45 @@ class Configuration(object):
         return url.replace("/api", "").rstrip("/")
 
 
+DECRYPTED_SSH_KEY_PASS = ""
+
+
+def get_decrypted_ssh_key_pass():
+    global DECRYPTED_SSH_KEY_PASS
+    if not DECRYPTED_SSH_KEY_PASS:
+        password = os.environ['ssh_key_pass']
+        DECRYPTED_SSH_KEY_PASS = boto3.client('kms').decrypt(
+            CiphertextBlob=b64decode(password))['Plaintext']
+    return DECRYPTED_SSH_KEY_PASS
+
+
 def event_handler(event, context):
     config = Configuration('config.json')
     if config.debug:
         logger.setLevel(logging.DEBUG)
+
+    if config.ssh_enabled:
+        ssh_tunnel = SSHTunnelForwarder(
+            (config.ssh_remote_host_public_url,
+             config.ssh_remote_host_public_port),
+            ssh_username=config.ssh_username,
+            ssh_pkey="./ssh.key",
+            ssh_private_key_password=(get_decrypted_ssh_key_pass()
+                                      if config.ssh_key_is_encrypted
+                                      else os.environ['ssh_key_pass']),
+            remote_bind_address=(config.ssh_remote_host_private_url,
+                                 config.ssh_remote_host_private_port),
+            local_bind_address=('0.0.0.0', )
+            # local_bind_address=('0.0.0.0', config.ssh_local_host_port)
+
+        )
+        ssh_tunnel.start()
+
     ha = HomeAssistant(config)
 
-    return ha.post('alexa/smart_home', event, wait=True)
+    result = ha.post('alexa/smart_home', ssh_tunnel.local_bind_port, event, wait=True)
+
+    if config.ssh_enabled:
+        ssh_tunnel.stop()
+
+    return result
