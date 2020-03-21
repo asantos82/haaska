@@ -1,0 +1,10 @@
+.git
+build
+build/*
+config
+config/*
+images
+images/*
+*.zip*
+venv
+config.json
