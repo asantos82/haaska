@@ -8,3 +8,5 @@ images/*
 *.zip*
 venv
 config.json
+ssh.key
+*.key
