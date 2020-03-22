@@ -1,8 +1,9 @@
-FROM python:3.6
+FROM python:3.6-slim-stretch
+
 
 RUN \
   apt-get update && \
-  apt-get install -y jq zip && \
+  apt-get install -y make jq zip && \
   pip install awscli && \
   apt-get clean && \
   cd /var/lib/apt/lists && rm -fr *Release* *Sources* *Packages* && \

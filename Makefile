@@ -25,6 +25,13 @@ haaska.zip: haaska.py config/*
 	chmod 755 $(BUILD_DIR)/haaska.py
 	cd $(BUILD_DIR); zip ../$@ -r *
 
+.PHONY: haaska-ssh
+haaska-ssh: haaska.py config.json ssh.key
+	mkdir -p $(BUILD_DIR)
+	pip$(PIP_VER) install $(PIP_EXTRA) -t $(BUILD_DIR) -r requirements-ssh.txt
+	cd $(BUILD_DIR); zip ../$@ -r9 .
+	zip -g $@.zip $^
+
 .PHONY: deploy
 deploy: haaska.zip
 	aws lambda update-function-configuration \
@@ -63,6 +70,7 @@ discover:
 .PHONY: clean
 clean:
 	rm -rf $(BUILD_DIR) haaska.zip
+	rm -rf $(BUILD_DIR) haaska-ssh.zip
 
 .PHONY: sample_config
 sample_config:
